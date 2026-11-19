@@ -1,8 +1,13 @@
 import { NextResponse } from 'next/server';
 import Groq from 'groq-sdk';
 import { tavily } from '@tavily/core';
+import NodeCache from 'node-cache';
+
+const cache = new NodeCache({ stdTTL: 86400 });
 
 export async function POST(request: Request) {
+  //cache storage
+
   try {
     const { message } = await request.json();
 
@@ -14,15 +19,20 @@ export async function POST(request: Request) {
     const groq = new Groq({ apiKey: process.env.AGENTAPI! });
     const tvly = tavily({ apiKey: process.env.TAVILYAPI! });
 
-    // 1st call
+    //get history from cache storage
 
+    const history = cache.get<any[]>('jarvis') || [];
+
+    console.log('OLD HISTORY:', history);
+
+    // 1st call
     const response = await groq.chat.completions.create({
       messages: [
         {
           role: 'system',
-          content:
-            'you are Jarvis ai and you are developed by the Developer named as Deepanshu arya you are very friendly in nature and give short and direct answers only not the long and overtext answers',
+          content: 'you are Jarvis AI and you are developed and desgined by Deepanshu Arya',
         },
+        ...history,
         {
           role: 'user',
           content: message,
@@ -56,8 +66,10 @@ export async function POST(request: Request) {
     }
     const data = response.choices[0]?.message || '';
 
+    let finalAnswer = '';
+
     if (data.tool_calls?.length) {
-      const query = await data.tool_calls[0].function.arguments;
+      const query = JSON.parse(data.tool_calls[0].function.arguments).query;
 
       const search = await tvly.search(query);
 
@@ -69,6 +81,7 @@ export async function POST(request: Request) {
             role: 'user',
             content: `question is ${message} and the search result is ${search} now based on the question and answer, simplyfy the answer into the short and perfect understanding way and make sure it is easy to understand and correct`,
           },
+          ...history,
         ],
         model: 'openai/gpt-oss-20b',
         reasoning_effort: 'low',
@@ -76,16 +89,29 @@ export async function POST(request: Request) {
         temperature: 0.5,
       });
 
-      const finalAnswer = final.choices[0]?.message?.content || '';
-
-      return NextResponse.json(
-        { message: 'tool kit successfully answerd', data: finalAnswer },
-        { status: 200 }
-      );
+      finalAnswer = final.choices[0]?.message?.content || '';
+    } else {
+      finalAnswer = data.content || '';
     }
 
+    //save conversation.....
+
+    cache.set('jarvis', [
+      ...history,
+      {
+        role: 'user',
+        content: message,
+      },
+      {
+        role: 'assistant',
+        content: finalAnswer,
+      },
+    ]);
+
+    console.log('SAVED HISTORY:', cache.get('jarvis'));
+
     return NextResponse.json(
-      { message: 'data successfully gettted', data: data.content },
+      { message: 'data successfully gettted', data: finalAnswer },
       { status: 200 }
     );
   } catch (error) {
